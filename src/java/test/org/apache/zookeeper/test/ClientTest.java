@@ -21,13 +21,16 @@ package org.apache.zookeeper.test;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.lang.management.OperatingSystemMXBean;
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
+import junit.framework.Assert;
 import org.apache.log4j.Logger;
+import org.apache.zookeeper.ClientCnxn;
 import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.TestableZooKeeper;
@@ -42,6 +45,10 @@ import org.apache.zookeeper.ZooDefs.Perms;
 import org.apache.zookeeper.data.ACL;
 import org.apache.zookeeper.data.Id;
 import org.apache.zookeeper.data.Stat;
+import org.apache.zookeeper.proto.ExistsRequest;
+import org.apache.zookeeper.proto.ReplyHeader;
+import org.apache.zookeeper.proto.RequestHeader;
+import org.apache.zookeeper.proto.SetDataResponse;
 import org.apache.zookeeper.server.PrepRequestProcessor;
 import org.junit.Test;
 
@@ -734,4 +741,42 @@ public class ClientTest extends ClientBase {
         assertTrue("open fds after test are not significantly higher than before",
                 unixos.getOpenFileDescriptorCount() <= initialFdCount + 10);
     }
+
+
+  /**
+   * We create a perfectly valid 'exists' request, except that the opcode is wrong.
+   * @return
+   * @throws Exception
+   */
+  @Test
+  public void testNonExistingOpCode() throws Exception  {
+    ZooKeeper zk = createClient();
+
+    Field cnxnField = ZooKeeper.class.getDeclaredField("cnxn");
+    cnxnField.setAccessible(true);
+    ClientCnxn cnxn = (ClientCnxn) cnxnField.get(zk);
+
+    Field chrootPathField = ClientCnxn.class.getDeclaredField("chrootPath");
+    chrootPathField.setAccessible(true);
+    String chrootPath = (String) chrootPathField.get(cnxn);
+
+    final String clientPath = "/m1";
+    final String serverPath = chrootPath + clientPath;
+
+    RequestHeader h = new RequestHeader();
+    h.setType(888);  // This code does not exists
+    ExistsRequest request = new ExistsRequest();
+    request.setPath(serverPath);
+    request.setWatch(false);
+    SetDataResponse response = new SetDataResponse();
+    ReplyHeader r = cnxn.submitRequest(h, request, response, null);
+
+    Assert.assertEquals(r.getErr(), Code.UNIMPLEMENTED.intValue());
+
+    try {
+      zk.exists("/m1", false);
+      fail("The connection should have been closed");
+    } catch (KeeperException.ConnectionLossException expected) {
+    }
+  }
 }
